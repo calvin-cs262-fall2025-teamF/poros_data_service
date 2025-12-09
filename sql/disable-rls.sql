@@ -1,5 +1,4 @@
 -- Disable Row Level Security for all tables
--- Run this in Supabase SQL Editor if you're using your own API
 -- (Not needed if using Supabase's auto-generated API with proper RLS policies)
 
 ALTER TABLE users DISABLE ROW LEVEL SECURITY;
@@ -20,5 +19,7 @@ SELECT tablename, rowsecurity
 FROM pg_tables 
 WHERE schemaname = 'public' 
 ORDER BY tablename;
+
+
 
 
