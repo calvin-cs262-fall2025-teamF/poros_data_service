@@ -125,11 +125,3 @@ The service is configured to work with **Supabase** for the database and **Verce
 - **[SUPABASE_SETUP.md](./SUPABASE_SETUP.md)** - Complete Supabase setup guide
 - **[CLIENT_INTEGRATION_SUPABASE.md](./CLIENT_INTEGRATION_SUPABASE.md)** - Client app integration
 
-## Next Steps
-
-1. ✅ Database schema - **DONE**
-2. ✅ Backend API service - **DONE**
-3. ✅ Supabase configuration - **DONE**
-4. ⚠️ Set up Supabase project - **TODO** (follow SUPABASE_QUICKSTART.md)
-5. ⚠️ Deploy API service - **TODO** (Vercel/Railway/Render)
-6. ⚠️ Connect Client to API - **TODO** (follow CLIENT_INTEGRATION_SUPABASE.md)
