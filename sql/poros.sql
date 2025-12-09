@@ -1,4 +1,4 @@
--- Poros Database Schema
+-- Pros Database Schema
 -- Based on the Client application structure
 
 -- Drop existing tables if they exist (in reverse order of dependencies)
@@ -345,5 +345,4 @@ COMMENT ON TABLE user_target_companies IS 'Junction table for users and their ta
 COMMENT ON TABLE events IS 'Stores company events (tech talks, workshops, etc.)';
 COMMENT ON TABLE courses IS 'Stores recommended courses for companies';
 COMMENT ON TABLE checklist_items IS 'Stores preparation checklist items (templates and user-specific)';
-
 
