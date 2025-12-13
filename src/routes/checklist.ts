@@ -73,6 +73,24 @@ router.post(
     const userId = req.userId!;
     const { companyId, title, description, completed, category } = req.body;
 
+    // Check if item already exists for this user/company/title
+    // This allows "syncing" behavior where we just send the state we want
+    const existing = await query(
+      'SELECT * FROM checklist_items WHERE user_id = $1 AND company_id = $2 AND title = $3',
+      [userId, companyId, title]
+    );
+
+    if (existing.rows.length > 0) {
+      // Update existing
+      const existingItem = existing.rows[0];
+      const result = await query(
+        'UPDATE checklist_items SET completed = $1, description = COALESCE($2, description), category = COALESCE($3, category) WHERE id = $4 RETURNING *',
+        [completed || false, description, category, existingItem.id]
+      );
+      return res.json(transformToCamelCase(result.rows[0]));
+    }
+
+    // Create new
     const checklistId = uuidv4();
     const result = await query(
       `INSERT INTO checklist_items (id, company_id, user_id, title, description, completed, category)
