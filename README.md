@@ -1,127 +1,48 @@
-# Poros Data Service
+# Poros Data Service (Backend)
 
-This repository contains the complete backend for the Poros application:
-- PostgreSQL database schema and seed data
-- RESTful API service (Node.js/Express/TypeScript)
+The backend API for the Poros application, built with Node.js, Express, and PostgreSQL (Supabase).
 
-## Project Structure
+## 🚀 Quick Start (Team Onboarding)
 
-```
-poros_data_service/
-├── sql/
-│   ├── poros.sql              # Database schema and seed data
-│   └── poros-queries.sql      # Example queries
-├── src/                       # API source code
-│   ├── config/                # Database configuration
-│   ├── middleware/            # Auth and error handling
-│   ├── routes/                # API route handlers
-│   ├── utils/                 # Utilities (transform, auth)
-│   └── index.ts               # Main server file
-├── package.json               # Node.js dependencies
-├── tsconfig.json              # TypeScript configuration
-└── API_README.md              # Detailed API documentation
-```
-
-## Quick Start
-
-### 1. Set Up Database
-
+### 1. Install Dependencies
 ```bash
-# Create database
-createdb poros
-
-# Load schema and seed data
-psql poros < sql/poros.sql
-```
-
-### 2. Set Up API
-
-```bash
-# Install dependencies
 npm install
+```
 
-# Create .env file (see API_README.md for details)
-cp .env.example .env
-# Edit .env with your database credentials
+### 2. Configure Environment (`.env`)
+You need a `.env` file in this directory. Ask the project lead for the current keys.
 
-# Start the API server
+**Required Variables:**
+```env
+PORT=3000
+DATABASE_URL=postgres://[user]:[password]@aws-0-us-east-1.pooler.supabase.com:6543/postgres
+JWT_SECRET=[secret]
+# ... any other backend keys
+```
+
+### 3. Run the Server
+Since we use a **Shared Database**, you do **NOT** need to run any migrations. The database is already set up.
+
+```bash
 npm run dev
 ```
+The server will start at `http://localhost:3000`.
 
-The API will be available at `http://localhost:3000`
+---
 
-## Documentation
-
-- **[API_README.md](./API_README.md)** - Complete API documentation with all endpoints
-- **[SETUP.md](./SETUP.md)** - Setup instructions
+## Database Schema
+We rely on a cloud Supabase database.
+- **Shared Database:** We all use the same `DATABASE_URL`. You will see the same users and data. **Be careful:** deleting data here affects everyone.
 
 ## Features
+- RESTful API with TypeScript
+- JWT Authentication
+- PostgreSQL Database (Supabase)
+- File Storage (BYTEA) for Resumes
 
-✅ PostgreSQL database schema  
-✅ RESTful API with TypeScript  
-✅ JWT authentication  
-✅ Automatic data transformation (snake_case ↔ camelCase)  
-✅ Input validation  
-✅ Error handling  
-✅ CORS and security headers  
-
-## API Endpoints Overview
-
-- **Authentication**: `/api/auth/signup`, `/api/auth/login`
-- **Users**: `/api/users/:id` (profile, targets, stats)
-- **Companies**: `/api/companies` (list, details with events/courses/checklist)
-- **Applications**: `/api/applications` (CRUD operations)
-- **Resumes**: `/api/resumes` (upload, manage, tailor)
-- **Checklist**: `/api/checklist` (user-specific checklist items)
-
-See [API_README.md](./API_README.md) for complete documentation.
-
-## Testing
-
-Test the database schema:
-```bash
-./test_sql.sh
-```
-
-Test the API:
-```bash
-# Start the server
-npm run dev
-
-# In another terminal, test endpoints
-curl http://localhost:3000/health
-```
-
-## Development
-
-```bash
-# Development mode (auto-reload)
-npm run dev
-
-# Build for production
-npm run build
-
-# Type checking
-npm run type-check
-
-# Start production server
-npm start
-```
-
-## Deployment
-
-The service is configured to work with **Supabase** for the database and **Vercel** for hosting.
-
-### Quick Start 🚀
-
-**Database Setup:** See [SUPABASE_QUICKSTART.md](./SUPABASE_QUICKSTART.md) for Supabase setup.
-
-**API Deployment:** See [VERCEL_DEPLOY.md](./VERCEL_DEPLOY.md) for deploying to Vercel.
-
-**Client Integration:** See [CLIENT_INTEGRATION_SUPABASE.md](./CLIENT_INTEGRATION_SUPABASE.md) for connecting your client.
-
-### Detailed Guides
-
-- **[SUPABASE_SETUP.md](./SUPABASE_SETUP.md)** - Complete Supabase setup guide
-- **[CLIENT_INTEGRATION_SUPABASE.md](./CLIENT_INTEGRATION_SUPABASE.md)** - Client app integration
-
+## API Endpoints
+- **Auth**: `/api/auth/signup`, `/api/auth/login`
+- **Users**: `/api/users/:id`
+- **Resumes**: `/api/resumes` (Cloud storage enabled)
+- **Companies**: `/api/companies`
+- **Applications**: `/api/applications`
