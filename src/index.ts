@@ -59,7 +59,7 @@ app.use(errorHandler);
 // For local development and other platforms, start the server normally
 if (process.env.VERCEL !== '1' && process.env.VERCEL_ENV !== 'production') {
   const serverPort = process.env.PORT || PORT;
-  app.listen(serverPort, () => {
+  app.listen(Number(serverPort), '0.0.0.0', () => {
     console.log(`🚀 Server running on port ${serverPort}`);
     console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`🔗 Health check: http://localhost:${serverPort}/health`);
