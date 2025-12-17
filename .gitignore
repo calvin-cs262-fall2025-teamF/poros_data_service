@@ -9,3 +9,7 @@ coverage/
 
 .vercel
 .env*.local
+
+# Uploads
+uploads/*
+!uploads/.gitkeep
