@@ -9,7 +9,6 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 
-import { Utils } from '../utils/transform';
 import { createClient } from '@supabase/supabase-js';
 
 const router = Router();
@@ -176,7 +175,7 @@ router.post(
     if (uploadError) {
       console.log('Supabase Config:', {
         url: supabaseUrl ? 'Set' : 'Missing',
-        key: supabaseKey ? 'Set' : 'Missing'
+        key: supabaseServiceKey ? 'Set' : 'Missing'
       });
       console.error('Supabase upload error details:', JSON.stringify(uploadError, null, 2));
       throw new AppError('Failed to upload file to storage', 500);
