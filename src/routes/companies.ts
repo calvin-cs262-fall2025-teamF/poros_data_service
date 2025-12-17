@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { query } from '../config/database';
+import { body, validationResult } from 'express-validator';
 import { transformToCamelCase } from '../utils/transform';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { authenticate, AuthRequest } from '../middleware/auth';
@@ -17,105 +18,6 @@ router.use(authenticate);
 router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const result = await query('SELECT * FROM company_recommendations_view ORDER BY name');
   res.json(transformToCamelCase(result.rows));
-}));
-
-/**
- * POST /api/companies
- * Create a new custom company (only if it doesn't exist)
- */
-router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const {
-    name,
-    industry,
-    logo,
-    id,
-    companyInfo,
-    events,
-    recommendedCourses,
-    preparationChecklist,
-    applicationTimeline
-  } = req.body;
-
-  if (!name || !industry) {
-    return res.status(400).json({ error: 'Name and Industry are required' });
-  }
-
-  const companyId = id || `custom-${Date.now()}`;
-
-  // Check if company exists first
-  const existing = await query('SELECT * FROM companies WHERE name = $1', [name]);
-  if (existing.rows.length > 0) {
-    return res.json(transformToCamelCase(existing.rows[0]));
-  }
-
-  const companyLogo = logo || '🏢';
-
-  // Extract info from nested object or use defaults
-  const size = companyInfo?.size || 'Unknown';
-  const culture = companyInfo?.culture || [];
-  const benefits = companyInfo?.benefits || [];
-  const interviewProcess = companyInfo?.interviewProcess || [];
-
-  try {
-    // Start transaction (simplified by just running sequential queries for now, ideally use client.query('BEGIN'))
-    // 1. Insert Company
-    const result = await query(
-      `INSERT INTO companies (id, name, industry, logo, company_size, culture_values, benefits, interview_process, application_timeline)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [companyId, name, industry, companyLogo, size, culture, benefits, interviewProcess, applicationTimeline || null]
-    );
-
-    const savedCompany = result.rows[0];
-
-    // 2. Insert Events
-    if (events && Array.isArray(events)) {
-      for (const event of events) {
-        await query(
-          `INSERT INTO events (id, company_id, title, type, event_date, description, registration_link)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [uuidv4(), companyId, event.title, event.type, event.date, event.description, event.registrationLink]
-        );
-      }
-    }
-
-    // 3. Insert Courses
-    if (recommendedCourses && Array.isArray(recommendedCourses)) {
-      for (const course of recommendedCourses) {
-        await query(
-          `INSERT INTO courses (id, company_id, title, provider, duration, level, skills, link)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [uuidv4(), companyId, course.title, course.provider, course.duration, course.level, course.skills, course.link]
-        );
-      }
-    }
-
-    // 4. Insert Checklist Items (Templates)
-    if (preparationChecklist && Array.isArray(preparationChecklist)) {
-      for (const item of preparationChecklist) {
-        await query(
-          `INSERT INTO checklist_items (id, company_id, title, description, category, user_id)
-           VALUES ($1, $2, $3, $4, $5, NULL)`,
-          [uuidv4(), companyId, item.title, item.description, item.category]
-        );
-      }
-    }
-
-    // Return the full object
-    // Re-fetch to be sure or just construct it? Constructing is faster.
-    const fullCompany = {
-      ...savedCompany,
-      events: events || [],
-      courses: recommendedCourses || [],
-      checklistItems: preparationChecklist || []
-    };
-
-    res.status(201).json(transformToCamelCase(fullCompany));
-
-  } catch (error) {
-    console.error('Error creating company:', error);
-    throw new AppError('Failed to save company data', 500);
-  }
 }));
 
 /**
@@ -156,6 +58,107 @@ router.get('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   res.json(transformToCamelCase(company));
 }));
+
+/**
+ * POST /api/companies
+ * Create a new company
+ */
+router.post(
+  '/',
+  [
+    body('name').trim().notEmpty().withMessage('Company name is required'),
+  ],
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    // Validate request
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const {
+      id: customId, // Client might send a custom ID (e.g. custom-123-google)
+      name,
+      logo,
+      industry,
+      companyInfo,
+      events,
+      recommendedCourses,
+      preparationChecklist
+    } = req.body;
+
+    const notes = req.body.notes || ''; // Optional notes
+
+    // Check if company already exists by name
+    const existing = await query('SELECT * FROM companies WHERE name = $1', [name]);
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ error: 'Company already exists' });
+    }
+
+    // Begin transaction-like sequence (not real DB transaction without client, but sequential)
+
+    // 1. Insert Company
+    const generatedId = uuidv4();
+
+    // Insert new company
+    // Using RETURNING id to get the generated ID
+    const companyResult = await query(
+      `INSERT INTO companies (id, name, notes, logo, industry, company_info) 
+       VALUES ($1, $2, $3, $4, $5, $6) 
+       RETURNING *`,
+      [generatedId, name, notes, logo, industry, companyInfo]
+    );
+    const newCompany = companyResult.rows[0];
+    const newCompanyId = newCompany.id;
+
+    // 2. Insert Events
+    if (events && Array.isArray(events)) {
+      for (const event of events) {
+        const eventId = uuidv4();
+        await query(
+          `INSERT INTO events (id, company_id, title, description, event_date, type, registration_link)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [eventId, newCompanyId, event.title, event.description, event.date, event.type, event.registrationLink]
+        );
+      }
+    }
+
+    // 3. Insert Courses
+    if (recommendedCourses && Array.isArray(recommendedCourses)) {
+      for (const course of recommendedCourses) {
+        const courseId = uuidv4();
+        await query(
+          `INSERT INTO courses (id, company_id, title, provider, duration, level, link, skills)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [courseId, newCompanyId, course.title, course.provider, course.duration, course.level, course.link, course.skills]
+        );
+      }
+    }
+
+    // 4. Insert Checklist Items (Templates)
+    if (preparationChecklist && Array.isArray(preparationChecklist)) {
+      for (const item of preparationChecklist) {
+        const itemId = uuidv4();
+        // user_id is NULL for template items
+        await query(
+          `INSERT INTO checklist_items (id, company_id, title, description, category, user_id)
+           VALUES ($1, $2, $3, $4, $5, NULL)`,
+          [itemId, newCompanyId, item.title, item.description, item.category]
+        );
+      }
+    }
+
+    // Return the full company object (reload it to be safe, or construct it)
+    // Constructing it saves a query
+    const fullCompany = {
+      ...transformToCamelCase(newCompany),
+      events: events || [],
+      courses: recommendedCourses || [],
+      checklistItems: preparationChecklist || []
+    };
+
+    res.status(201).json(fullCompany);
+  })
+);
 
 export default router;
 

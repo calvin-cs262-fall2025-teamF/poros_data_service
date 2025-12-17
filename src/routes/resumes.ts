@@ -5,13 +5,28 @@ import { transformToCamelCase, transformToSnakeCase } from '../utils/transform';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { v4 as uuidv4 } from 'uuid';
-
 import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+
+import { Utils } from '../utils/transform';
+import { createClient } from '@supabase/supabase-js';
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage() });
 
-// All routes require authentication
+// Initialize Supabase client
+const supabaseUrl = process.env.SUPABASE_URL || '';
+// Initialize Supabase Admin client for uploads (bypasses RLS)
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+if (!supabaseServiceKey) {
+  console.warn('SUPABASE_SERVICE_ROLE_KEY is missing. Uploads may fail if RLS is enabled.');
+}
+
+// Create a single admin client instance if key exists, otherwise fallback to anon (which might fail)
+const supabaseAdmin = supabaseServiceKey
+  ? createClient(supabaseUrl, supabaseServiceKey)
+  : createClient(supabaseUrl, process.env.SUPABASE_KEY || ''); // Fallback to anon client if service key is missing
+
 router.use(authenticate);
 
 /**
@@ -91,42 +106,99 @@ router.get('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   res.json(transformToCamelCase(result.rows[0]));
 }));
 
+// Configure Multer for memory storage (buffer)
+const storage = multer.memoryStorage();
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === 'application/pdf') {
+      cb(null, true);
+    } else {
+      cb(new Error('Only PDF files are allowed!'));
+    }
+  }
+});
+
 /**
  * POST /api/resumes
  * Upload a new resume
  */
 router.post(
   '/',
+  upload.single('file'), // Multer middleware
   [
     body('name').trim().notEmpty().withMessage('Name is required'),
-    body('fileName').trim().notEmpty().withMessage('File name is required'),
-    body('fileUri').trim().notEmpty().withMessage('File URI is required'),
-    body('isPrimary').optional().isBoolean(),
+    // removed fileUri/fileName checks as they come from file
+    body('isPrimary').optional(),
   ],
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      // Clean up uploaded file if validation error
+      // Memory storage auto-cleans, but if using disk we would unlink
+
       return res.status(400).json({ errors: errors.array() });
     }
 
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
     const userId = req.userId!;
-    const { name, fileName, fileUri, isPrimary } = req.body;
+    const { name, isPrimary } = req.body;
+
+    // Parse isPrimary since it comes as string in FormData 'true'/'false'
+    const isPrimaryBool = isPrimary === 'true';
 
     // If this is set as primary, unset other primary resumes
-    if (isPrimary) {
+    if (isPrimaryBool) {
       await query('UPDATE resumes SET is_primary = FALSE WHERE user_id = $1', [userId]);
     }
 
     const resumeId = uuidv4();
+    const fileName = req.file.originalname;
+
+    // Upload file to Supabase Storage
+    const uniqueSuffix = `${Date.now()}-${uuidv4()}`;
+    const ext = path.extname(fileName);
+    const storagePath = `${userId}/${uniqueSuffix}${ext}`;
+
+    const { data: uploadData, error: uploadError } = await supabaseAdmin
+      .storage
+      .from('resumes')
+      .upload(storagePath, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: false
+      });
+
+    if (uploadError) {
+      console.log('Supabase Config:', {
+        url: supabaseUrl ? 'Set' : 'Missing',
+        key: supabaseKey ? 'Set' : 'Missing'
+      });
+      console.error('Supabase upload error details:', JSON.stringify(uploadError, null, 2));
+      throw new AppError('Failed to upload file to storage', 500);
+    }
+
+    // Get public URL
+    const { data: { publicUrl } } = supabaseAdmin
+      .storage
+      .from('resumes')
+      .getPublicUrl(storagePath);
+
+    const fileUri = publicUrl;
+
     const result = await query(
       `INSERT INTO resumes (id, user_id, name, file_name, file_uri, is_primary)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [resumeId, userId, name, fileName, fileUri, isPrimary || false]
+      [resumeId, userId, name, fileName, fileUri, isPrimaryBool]
     );
 
     // Update user's resume_uri if this is primary
-    if (isPrimary) {
+    if (isPrimaryBool) {
       await query('UPDATE users SET resume_uri = $1 WHERE id = $2', [fileUri, userId]);
     }
 
@@ -260,76 +332,92 @@ router.post(
   })
 );
 
+
+
 /**
  * PUT /api/resumes/tailored/:id
- * Update a tailored resume (e.g. status, fileUri)
+ * Update a tailored resume (upload file)
  */
 router.put(
   '/tailored/:id',
-  upload.single('file'), // Handle file upload
+  upload.single('file'),
   [
-    // fileUri is now optional/can be derived
     body('processingStatus').optional().isIn(['processing', 'completed', 'failed']),
   ],
   asyncHandler(async (req: AuthRequest, res: Response) => {
-    // Validation results (skip if it complains about missing fileUri, since we might upload file instead)
-
-    // ... logic adjustment: if file is present, use it.
-
     const tailoredResumeId = req.params.id;
     const userId = req.userId!;
-    const { processingStatus } = req.body;
-    const file = req.file;
 
-    // Verify it belongs to user
-    console.log(`[Resume PUT Debug] Attempting update for ID: ${tailoredResumeId}, User: ${userId}`);
+    // Verify it exists
     const existing = await query('SELECT id FROM tailored_resumes WHERE id = $1 AND user_id = $2', [tailoredResumeId, userId]);
     if (existing.rows.length === 0) {
-      console.error(`[Resume PUT Debug] 404 Not Found. ID: ${tailoredResumeId}, User: ${userId}`);
       throw new AppError('Tailored resume not found', 404);
     }
 
-    const updates = [];
+    let fileUri = undefined;
+
+    // Handle file upload if present
+    if (req.file) {
+      const fileName = req.file.originalname;
+      const uniqueSuffix = `${Date.now()}-${uuidv4()}`;
+      const ext = path.extname(fileName) || '.pdf'; // valid for blob uploads
+      const storagePath = `${userId}/tailored/${uniqueSuffix}${ext}`;
+
+      const { data, error: uploadError } = await supabaseAdmin
+        .storage
+        .from('resumes')
+        .upload(storagePath, req.file.buffer, {
+          contentType: req.file.mimetype || 'application/pdf',
+          upsert: false
+        });
+
+      if (uploadError) {
+        console.error('Supabase upload error:', uploadError);
+        throw new AppError('Failed to upload tailored resume', 500);
+      }
+
+      const { data: { publicUrl } } = supabaseAdmin
+        .storage
+        .from('resumes')
+        .getPublicUrl(storagePath);
+
+      fileUri = publicUrl;
+    }
+
+    const updates = req.body;
+    let queryText = 'UPDATE tailored_resumes SET updated_at = CURRENT_TIMESTAMP';
     const values = [];
     let paramIndex = 1;
 
-    // If file uploaded, update file_data AND set file_uri to download link
-    if (file) {
-      updates.push(`file_data = $${paramIndex}`);
-      values.push(file.buffer);
-      paramIndex++;
-
-      const downloadUri = `/api/resumes/tailored/${tailoredResumeId}/download`;
-      updates.push(`file_uri = $${paramIndex}`);
-      values.push(downloadUri);
+    if (fileUri) {
+      queryText += `, file_uri = $${paramIndex}`;
+      values.push(fileUri);
       paramIndex++;
     }
 
-    if (processingStatus) {
-      updates.push(`processing_status = $${paramIndex}`);
-      values.push(processingStatus);
+    if (updates.processingStatus) {
+      queryText += `, processing_status = $${paramIndex}`;
+      values.push(updates.processingStatus);
       paramIndex++;
     }
 
-    if (updates.length === 0) {
-      throw new AppError('No changes provided', 400);
-    }
+    // Add other fields if needed
 
+    queryText += ` WHERE id = $${paramIndex} AND user_id = $${paramIndex + 1} RETURNING *`;
     values.push(tailoredResumeId, userId);
 
-    const result = await query(
-      `UPDATE tailored_resumes 
-       SET ${updates.join(', ')} 
-       WHERE id = $${paramIndex} AND user_id = $${paramIndex + 1}
-       RETURNING *`,
-      values
+    const result = await query(queryText, values);
+
+    // Fetch the joined data to return consistent format
+    const fullResult = await query(
+      `SELECT tr.*, r.name as original_resume_name, r.file_uri as original_resume_uri
+       FROM tailored_resumes tr
+       JOIN resumes r ON tr.original_resume_id = r.id
+       WHERE tr.id = $1`,
+      [tailoredResumeId]
     );
 
-    // Return transformed result
-    const r = result.rows[0];
-    // We might need to join to get original resume name akin to GET endpoint?
-    // For now, returning just the record is fine as frontend usually refetches.
-    res.json(transformToCamelCase(r));
+    res.json(transformToCamelCase(fullResult.rows[0]));
   })
 );
 
@@ -337,73 +425,27 @@ router.put(
  * DELETE /api/resumes/tailored/:id
  * Delete a tailored resume
  */
-router.delete(
-  '/tailored/:id',
-  asyncHandler(async (req: AuthRequest, res: Response) => {
-    const tailoredResumeId = req.params.id;
-    const userId = req.userId!;
-
-    const result = await query(
-      'DELETE FROM tailored_resumes WHERE id = $1 AND user_id = $2 RETURNING id',
-      [tailoredResumeId, userId]
-    );
-
-    if (result.rows.length === 0) {
-      throw new AppError('Tailored resume not found', 404);
-    }
-
-    res.json({ message: 'Tailored resume deleted successfully', id: tailoredResumeId });
-  })
-);
-
-/**
- * GET /api/resumes/:id/download
- * Download a specific resume file
- */
-router.get('/:id/download', asyncHandler(async (req: AuthRequest, res: Response) => {
-  const resumeId = req.params.id;
-  const userId = req.userId!;
-
-  const result = await query(
-    'SELECT file_name, file_data FROM resumes WHERE id = $1 AND user_id = $2',
-    [resumeId, userId]
-  );
-
-  if (result.rows.length === 0 || !result.rows[0].file_data) {
-    throw new AppError('Resume file not found', 404);
-  }
-
-  const fileData = result.rows[0].file_data;
-  const fileName = result.rows[0].file_name;
-
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-  res.send(fileData);
-}));
-
-/**
- * GET /api/resumes/tailored/:id/download
- * Download a tailored resume file
- */
-router.get('/tailored/:id/download', asyncHandler(async (req: AuthRequest, res: Response) => {
+router.delete('/tailored/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
   const tailoredResumeId = req.params.id;
   const userId = req.userId!;
 
+  // First check if it exists and get file URI to delete from storage if needed
+  // (Optional: delete from Supabase storage if we stored a separate copy)
+
   const result = await query(
-    'SELECT job_description, file_data FROM tailored_resumes WHERE id = $1 AND user_id = $2',
+    'DELETE FROM tailored_resumes WHERE id = $1 AND user_id = $2 RETURNING id',
     [tailoredResumeId, userId]
   );
 
-  if (result.rows.length === 0 || !result.rows[0].file_data) {
-    throw new AppError('Tailored resume file not found', 404);
+  if (result.rows.length === 0) {
+    throw new AppError('Tailored resume not found', 404);
   }
 
-  const fileData = result.rows[0].file_data;
-  const fileName = `Tailored_Resume.pdf`;
-
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-  res.send(fileData);
+  res.json({ message: 'Tailored resume deleted successfully', id: tailoredResumeId });
 }));
 
+
+
 export default router;
+
+

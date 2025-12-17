@@ -74,30 +74,31 @@ router.post(
     const { companyId, title, description, completed, category } = req.body;
 
     // Check if item already exists for this user/company/title
-    // This allows "syncing" behavior where we just send the state we want
     const existing = await query(
-      'SELECT * FROM checklist_items WHERE user_id = $1 AND company_id = $2 AND title = $3',
+      'SELECT id FROM checklist_items WHERE user_id = $1 AND company_id = $2 AND title = $3',
       [userId, companyId, title]
     );
 
+    let result;
     if (existing.rows.length > 0) {
       // Update existing
-      const existingItem = existing.rows[0];
-      const result = await query(
-        'UPDATE checklist_items SET completed = $1, description = COALESCE($2, description), category = COALESCE($3, category) WHERE id = $4 RETURNING *',
-        [completed || false, description, category, existingItem.id]
+      result = await query(
+        `UPDATE checklist_items 
+         SET completed = $1, description = COALESCE($2, description), category = COALESCE($3, category)
+         WHERE id = $4
+         RETURNING *`,
+        [completed || false, description, category, existing.rows[0].id]
       );
-      return res.json(transformToCamelCase(result.rows[0]));
+    } else {
+      // Insert new
+      const checklistId = uuidv4();
+      result = await query(
+        `INSERT INTO checklist_items (id, company_id, user_id, title, description, completed, category)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *`,
+        [checklistId, companyId, userId, title, description || null, completed || false, category]
+      );
     }
-
-    // Create new
-    const checklistId = uuidv4();
-    const result = await query(
-      `INSERT INTO checklist_items (id, company_id, user_id, title, description, completed, category)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING *`,
-      [checklistId, companyId, userId, title, description || null, completed || false, category]
-    );
 
     res.status(201).json(transformToCamelCase(result.rows[0]));
   })
